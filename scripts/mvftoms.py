@@ -249,10 +249,19 @@ def main():
                         help="Only select a range of tracking scans. Default is select all "
                              "tracking scans. Accepts a comma list or a casa style range "
                              "such as 5~10.")
+    parser.add_argument("--spec-weight", default="all", choices=ms_extra.default_spec_weight + ["all"],
+                        help="Spectral weight/noie column(s) to include in MS.")
     parser.add_argument("datasets", help="Dataset path", nargs='+')
 
     parseargs = parser.parse_args()
     # positional arguments are now part of arguments, but lets keep the logic the same
+    # convert spec-weight into a list
+    if parseargs.spec_weight == "all":
+        parseargs.spec_weight = ms_extra.default_spec_weight
+    else:
+        parseargs.spec_weight = [parseargs.spec_weight]
+
+
     options = parseargs
     args = parseargs.datasets
 
@@ -552,7 +561,7 @@ def main():
         else:
             # Create the MeasurementSet
             table_desc, dminfo = ms_extra.kat_ms_desc_and_dminfo(
-            nbl=nbl, nchan=nchan, ncorr=npol, model_data=options.model_data)
+            nbl=nbl, nchan=nchan, ncorr=npol, model_data=options.model_data, spec_weight=options.spec_weight)
 
             ms_extra.create_ms(ms_name, table_desc, dminfo)
 

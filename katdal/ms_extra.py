@@ -32,10 +32,13 @@ from pkg_resources import parse_version
 # Perform python-casacore version checks
 pyc_ver = parse_version(casacore.__version__)
 req_ver = parse_version("2.2.1")
+
 if not pyc_ver >= req_ver:
     raise ImportError(f"python-casacore {req_ver} is required, but the current version is {pyc_ver}. "
                       f"Note that python-casacore {req_ver} requires at least casacore 2.3.0.")
 
+
+default_spec_weight = ["WEIGHT_SPECTRUM", "SIGMA_SPECTRUM"]
 
 def open_table(name, readonly=False, verbose=False, **kwargs):
     """Open casacore Table."""
@@ -100,7 +103,9 @@ MS_TO_NP_TYPE_MAP = {
 }
 
 
-def kat_ms_desc_and_dminfo(nbl, nchan, ncorr, model_data=False):
+def kat_ms_desc_and_dminfo(nbl, nchan, ncorr, model_data=False, 
+                           spec_weight=default_spec_weight,
+                            imaging_weight=True):
     """
     Creates Table Description and Data Manager Information objects that
     describe a MeasurementSet suitable for holding MeerKAT data.
@@ -115,6 +120,7 @@ def kat_ms_desc_and_dminfo(nbl, nchan, ncorr, model_data=False):
     :param ncorr: Number of correlation products.
     :param model_data: Boolean indicated whether MODEL_DATA and CORRECTED_DATA
                         should be added to the Measurement Set.
+    :param chan_weight: Weight columns to include in MS
     :return: Returns a tuple containing a table description describing
             the extra columns and hypercolumns, as well as a Data Manager
             description.
@@ -132,6 +138,8 @@ def kat_ms_desc_and_dminfo(nbl, nchan, ncorr, model_data=False):
 
     # Used to set the SPEC for each Data Manager Group
     dmgroup_spec = {}
+
+
 
     def dmspec(coldesc, tile_mem_limit=None):
         """
@@ -210,33 +218,35 @@ def kat_ms_desc_and_dminfo(nbl, nchan, ncorr, model_data=False):
     dmgroup_spec[dm_group] = dmspec(desc["desc"])
     additional_columns.append(desc)
 
-    dm_group = 'WeightSpectrum'
-    shape = [nchan, ncorr]
-    desc = tables.tablecreatearraycoldesc(
-        "WEIGHT_SPECTRUM", 1.0, comment="Per-channel weights",
-        options=4, valuetype='float', shape=shape, ndim=len(shape),
-        datamanagergroup=dm_group, datamanagertype='TiledColumnStMan')
-    dmgroup_spec[dm_group] = dmspec(desc["desc"])
-    additional_columns.append(desc)
+    if 'WEIGHT_SPECTRUM' in spec_weight:
+        dm_group = 'WeightSpectrum'
+        shape = [nchan, ncorr]
+        desc = tables.tablecreatearraycoldesc(
+            "WEIGHT_SPECTRUM", 1.0, comment="Per-channel weights",
+            options=4, valuetype='float', shape=shape, ndim=len(shape),
+            datamanagergroup=dm_group, datamanagertype='TiledColumnStMan')
+        dmgroup_spec[dm_group] = dmspec(desc["desc"])
+        additional_columns.append(desc)
+    if 'SIGMA_SPECTRUM' in spec_weight:
+        dm_group = 'SigmaSpectrum'
+        shape = [nchan, ncorr]
+        desc = tables.tablecreatearraycoldesc(
+            "SIGMA_SPECTRUM", 1.0, comment="Per-channel inverse sqrt weights",
+            options=4, valuetype='float', shape=shape, ndim=len(shape),
+            datamanagergroup=dm_group, datamanagertype='TiledColumnStMan')
+        dmgroup_spec[dm_group] = dmspec(desc["desc"])
+        additional_columns.append(desc)
 
-    dm_group = 'SigmaSpectrum'
-    shape = [nchan, ncorr]
-    desc = tables.tablecreatearraycoldesc(
-        "SIGMA_SPECTRUM", 1.0, comment="Per-channel inverse sqrt weights",
-        options=4, valuetype='float', shape=shape, ndim=len(shape),
-        datamanagergroup=dm_group, datamanagertype='TiledColumnStMan')
-    dmgroup_spec[dm_group] = dmspec(desc["desc"])
-    additional_columns.append(desc)
-
-    dm_group = 'ImagingWeight'
-    shape = [nchan]
-    desc = tables.tablecreatearraycoldesc(
-        "IMAGING_WEIGHT", 0,
-        comment="Weight set by imaging task (e.g. uniform weighting)",
-        options=4, valuetype='float', shape=shape, ndim=len(shape),
-        datamanagergroup=dm_group, datamanagertype='TiledColumnStMan')
-    dmgroup_spec[dm_group] = dmspec(desc["desc"])
-    additional_columns.append(desc)
+    if imaging_weight:
+        dm_group = 'ImagingWeight'
+        shape = [nchan]
+        desc = tables.tablecreatearraycoldesc(
+            "IMAGING_WEIGHT", 0,
+            comment="Weight set by imaging task (e.g. uniform weighting)",
+            options=4, valuetype='float', shape=shape, ndim=len(shape),
+            datamanagergroup=dm_group, datamanagertype='TiledColumnStMan')
+        dmgroup_spec[dm_group] = dmspec(desc["desc"])
+        additional_columns.append(desc)
 
     # Add MODEL_DATA and CORRECTED_DATA if requested
     if model_data:
@@ -302,7 +312,8 @@ define_hypercolumn(caltable_desc_complex)
 
 def populate_main_dict(uvw_coordinates, vis_data, flag_data, weight_data, timestamps, antenna1_index,
                        antenna2_index, integrate_length, field_id=0, state_id=1,
-                       scan_number=0, model_data=None, corrected_data=None):
+                       scan_number=0, model_data=None, corrected_data=None, 
+                       spec_weight=default_spec_weight):
     """Construct a dictionary containing the columns of the MAIN table.
 
     The MAIN table contains the visibility data itself. The vis data has shape
@@ -336,6 +347,8 @@ def populate_main_dict(uvw_coordinates, vis_data, flag_data, weight_data, timest
         Array containing complex visibility data in Janskys
     corrected_data : array of complex, shape (num_vis_samples, num_channels, num_pols)
         Array containing complex visibility data in Janskys
+    
+    chan_weight: Weight columns to include in MS (num_vis_samples, num_channels, num_pols)
 
     Returns
     -------
@@ -380,14 +393,16 @@ def populate_main_dict(uvw_coordinates, vis_data, flag_data, weight_data, timest
     # Row flag - flag all data in this row if True (boolean)
     main_dict['FLAG_ROW'] = np.zeros(num_vis_samples, dtype=np.uint8)
     # The visibility weights
-    main_dict['WEIGHT_SPECTRUM'] = weight_data
+    if 'WEIGHT_SPECTRUM' in spec_weight:
+        main_dict['WEIGHT_SPECTRUM'] = weight_data
     # Estimated RMS noise per frequency channel
     # note this column is used when computing calibration weights
     # in CASA - WEIGHT_SPECTRUM may be modified based on the
     # values in this column. See
     # https://casadocs.readthedocs.io/en/stable/notebooks/data_weights.html
     # for further details
-    main_dict['SIGMA_SPECTRUM'] = weight_data ** -0.5
+    if 'SIGMA_SPECTRUM' in spec_weight:
+        main_dict['SIGMA_SPECTRUM'] = weight_data ** -0.5
     # Weight set by imaging task (e.g. uniform weighting) (float, 1-dim)
     # main_dict['IMAGING_WEIGHT'] = np.ones((num_vis_samples, 1), dtype=np.float32)
     # The sampling interval (double)
@@ -916,7 +931,8 @@ def populate_ms_dict(uvw_coordinates, vis_data, timestamps, antenna1_index, ante
                      integrate_length, center_frequencies, channel_bandwidths,
                      antenna_names, antenna_positions, antenna_diameter,
                      num_receptors_per_feed, start_time, end_time,
-                     telescope_name, observer_name, project_name, phase_center, obs_modes):
+                     telescope_name, observer_name, project_name, phase_center, obs_modes,
+                     spec_weight=default_spec_weight):
     """Construct a dictionary containing all the tables in a MeasurementSet.
 
     Parameters
@@ -960,6 +976,8 @@ def populate_ms_dict(uvw_coordinates, vis_data, timestamps, antenna1_index, ante
     obs_modes: array of strings
         Observing modes
 
+    chan_weight: Weight columns to include in MS
+
     Returns
     -------
     ms_dict : dict
@@ -968,7 +986,7 @@ def populate_ms_dict(uvw_coordinates, vis_data, timestamps, antenna1_index, ante
     """
     ms_dict = {}
     ms_dict['MAIN'] = populate_main_dict(uvw_coordinates, vis_data, timestamps,
-                                         antenna1_index, antenna2_index, integrate_length)
+                                         antenna1_index, antenna2_index, integrate_length, spec_weight=spec_weight)
     ms_dict['ANTENNA'] = populate_antenna_dict(antenna_names, antenna_positions, antenna_diameter)
     ms_dict['FEED'] = populate_feed_dict(len(antenna_positions), num_receptors_per_feed)
     ms_dict['DATA_DESCRIPTION'] = populate_data_description_dict()

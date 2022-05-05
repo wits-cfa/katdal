@@ -176,7 +176,7 @@ def ms_writer_process(
                         uvw_coordinates, vis_data,
                         flag_data, weight_data, out_mjd, a1, a2,
                         item.dump_time_width, big_field_id, big_state_id,
-                        big_scan_itr, model_data, corrected_data)
+                        big_scan_itr, model_data, corrected_data, spec_weight=options.spec_weight)
 
                     # Write data to MS.
                     nrows = ms_extra.write_rows(main_table, main_dict,
